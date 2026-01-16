@@ -53,5 +53,4 @@ oldHttpGet = hookfunction(game.HttpGet, function(self, url, ...)
     return oldHttpGet(self, url, ...)
 end)
 
-print("🚀 Hệ thống Dumper đã sẵn sàng!")
-print("Bây giờ bạn hãy chạy lệnh loadstring của bạn.")
+print("load xong rồi chạy link raw đi cu")
