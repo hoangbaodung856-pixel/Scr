@@ -28,9 +28,9 @@ local function sendFile(fileName, content)
     end)
     
     if success then
-        print("✅ Đã gửi file thành công lên Discord!")
+        print(" Đã gửi file hook qua dis rồi cu")
     else
-        warn("❌ Lỗi gửi Webhook: " .. tostring(response))
+        warn("Lỗi gửi Webhook: " .. tostring(response))
     end
 end
 
